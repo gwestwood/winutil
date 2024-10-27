@@ -25,6 +25,67 @@ function Test-CompatibleImage() {
     }
 }
 
+class ErroredPackage {
+    [string]$PackageName
+    [string]$ErrorMessage
+    ErroredPackage() { $this.Init(@{} )}
+    # Constructor for packages that have errored out
+    ErroredPackage([string]$pkgName, [string]$reason) {
+        $this.PackageName = $pkgName
+        $this.ErrorMessage = $reason
+    }
+}
+
+function Get-FidoLangFromCulture {
+
+    param (
+        [Parameter(Mandatory, Position = 0)] [string]$langName
+    )
+
+    switch -Wildcard ($langName)
+    {
+        "ar*" { return "Arabic" }
+        "pt-BR" { return "Brazilian Portuguese" }
+        "bg*" { return "Bulgarian" }
+        {($_ -eq "zh-CH") -or ($_ -like "zh-Hans*") -or ($_ -eq "zh-SG") -or ($_ -eq "zh-CHS")} { return "Chinese (Simplified)" }
+        {($_ -eq "zh") -or ($_ -eq "zh-Hant") -or ($_ -eq "zh-HK") -or ($_ -eq "zh-MO") -or ($_ -eq "zh-TW") -or ($_ -eq "zh-CHT")} { return "Chinese (Traditional)" }
+        "hr*" { return "Croatian" }
+        "cs*" { return "Czech" }
+        "da*" { return "Danish" }
+        "nl*" { return "Dutch" }
+        "en-US" { return "English" }
+        {($_ -like "en*") -and ($_ -ne "en-US")} { return "English International" }
+        "et*" { return "Estonian" }
+        "fi*" { return "Finnish" }
+        {($_ -like "fr*") -and ($_ -ne "fr-CA")} { return "French" }
+        "fr-CA" { return "French Canadian" }
+        "de*" { return "German" }
+        "el*" { return "Greek" }
+        "he*" { return "Hebrew" }
+        "hu*" { return "Hungarian" }
+        "it*" { return "Italian" }
+        "ja*" { return "Japanese" }
+        "ko*" { return "Korean" }
+        "lv*" { return "Latvian" }
+        "lt*" { return "Lituanian" }
+        "nb*" { return "Norwegian" }
+        "pl*" { return "Polish" }
+        {($_ -like "pt*") -and ($_ -ne "pt-BR")} { return "Portuguese" }
+        "ro*" { return "Romanian" }
+        "ru*" { return "Russian" }
+        "sr-Latn*" { return "Serbian Latin" }
+        "sk*" { return "Slovak" }
+        "sl*" { return "Slovenian" }
+        {($_ -like "es*") -and ($_ -ne "es-MX")} { return "Spanish" }
+        "es-MX" { return "Spanish (Mexico)" }
+        "sv*" { return "Swedish" }
+        "th*" { return "Thai" }
+        "tr*" { return "Turkish" }
+        "uk*" { return "Ukrainian" }
+        default { return "English" }
+    }
+}
+
 function Remove-Features() {
     <#
         .SYNOPSIS
@@ -37,23 +98,26 @@ function Remove-Features() {
             Remove-Features
     #>
     try {
-        $featlist = (Get-WindowsOptionalFeature -Path $scratchDir).FeatureName
+        $featlist = (Get-WindowsOptionalFeature -Path $scratchDir)
 
         $featlist = $featlist | Where-Object {
-            $_ -NotLike "*Defender*" -AND
-            $_ -NotLike "*Printing*" -AND
-            $_ -NotLike "*TelnetClient*" -AND
-            $_ -NotLike "*PowerShell*" -AND
-            $_ -NotLike "*NetFx*" -AND
-            $_ -NotLike "*Media*" -AND
-            $_ -NotLike "*NFS*"
+            $_.FeatureName -NotLike "*Defender*" -AND
+            $_.FeatureName -NotLike "*Printing*" -AND
+            $_.FeatureName -NotLike "*TelnetClient*" -AND
+            $_.FeatureName -NotLike "*PowerShell*" -AND
+            $_.FeatureName -NotLike "*NetFx*" -AND
+            $_.FeatureName -NotLike "*Media*" -AND
+            $_.FeatureName -NotLike "*NFS*" -AND
+            $_.FeatureName -NotLike "*SearchEngine*" -AND
+            $_.FeatureName -NotLike "*RemoteDesktop*" -AND
+            $_.State -ne "Disabled"
         }
 
         foreach($feature in $featlist) {
-            $status = "Removing feature $feature"
+            $status = "Removing feature $($feature.FeatureName)"
             Write-Progress -Activity "Removing features" -Status $status -PercentComplete ($counter++/$featlist.Count*100)
-            Write-Debug "Removing feature $feature"
-            Disable-WindowsOptionalFeature -Path "$scratchDir" -FeatureName $feature -Remove  -ErrorAction SilentlyContinue -NoRestart
+            Write-Debug "Removing feature $($feature.FeatureName)"
+            Disable-WindowsOptionalFeature -Path "$scratchDir" -FeatureName $($feature.FeatureName) -Remove  -ErrorAction SilentlyContinue -NoRestart
         }
         Write-Progress -Activity "Removing features" -Status "Ready" -Completed
         Write-Host "You can re-enable the disabled features at any time, using either Windows Update or the SxS folder in <installation media>\Sources."
@@ -93,6 +157,7 @@ function Remove-Packages {
                 $_ -NotLike "*ParentalControls*" -AND
                 $_ -NotLike "*Win32WebViewHost*" -AND
                 $_ -NotLike "*InputApp*" -AND
+                $_ -NotLike "*DirectPlay*" -AND
                 $_ -NotLike "*AccountsControl*" -AND
                 $_ -NotLike "*AsyncTextService*" -AND
                 $_ -NotLike "*CapturePicker*" -AND
@@ -104,27 +169,54 @@ function Remove-Packages {
                 $_ -NotLike "*WMIC*" -AND
                 $_ -NotLike "*UI.XaML*" -AND
                 $_ -NotLike "*Ethernet*" -AND
-                $_ -NotLike "*Wifi*"
+                $_ -NotLike "*Wifi*" -AND
+                $_ -NotLike "*FodMetadata*" -AND
+                $_ -NotLike "*Foundation*" -AND
+                $_ -NotLike "*LanguageFeatures*" -AND
+                $_ -NotLike "*VBSCRIPT*" -AND
+                $_ -NotLike "*License*"
             }
 
         $failedCount = 0
 
+        $erroredPackages = [System.Collections.Generic.List[ErroredPackage]]::new()
+
         foreach ($pkg in $pkglist) {
             try {
                 $status = "Removing $pkg"
-                Write-Progress -Activity "Removing Apps" -Status $status -PercentComplete ($counter++/$pkglist.Count*100)
+                Write-Progress -Activity "Removing Packages" -Status $status -PercentComplete ($counter++/$pkglist.Count*100)
                 Remove-WindowsPackage -Path "$scratchDir" -PackageName $pkg -NoRestart -ErrorAction SilentlyContinue
             } catch {
-                # This can happen if the package that is being removed is a permanent one, like FodMetadata
-                Write-Host "Could not remove OS package $($pkg)"
+                # This can happen if the package that is being removed is a permanent one
+                $erroredPackages.Add([ErroredPackage]::new($pkg, $_.Exception.Message))
                 $failedCount += 1
                 continue
             }
         }
-        Write-Progress -Activity "Removing Apps" -Status "Ready" -Completed
+        Write-Progress -Activity "Removing Packages" -Status "Ready" -Completed
         if ($failedCount -gt 0)
         {
-            Write-Host "Some packages could not be removed. Do not worry: your image will still work fine. This can happen if the package is permanent or has been superseded by a newer one."
+            Write-Host "$failedCount package(s) could not be removed. Your image will still work fine, however. Below is information on what packages failed to be removed and why."
+            if ($erroredPackages.Count -gt 0)
+            {
+                $erroredPackages = $erroredPackages | Sort-Object -Property ErrorMessage
+
+                $previousErroredPackage = $erroredPackages[0]
+                $counter = 0
+                Write-Host ""
+                Write-Host "- $($previousErroredPackage.ErrorMessage)"
+                foreach ($erroredPackage in $erroredPackages) {
+                    if ($erroredPackage.ErrorMessage -ne $previousErroredPackage.ErrorMessage) {
+                        Write-Host ""
+                        $counter = 0
+                        Write-Host "- $($erroredPackage.ErrorMessage)"
+                    }
+                    $counter += 1
+                    Write-Host "  $counter) $($erroredPackage.PackageName)"
+                    $previousErroredPackage = $erroredPackage
+                }
+                Write-Host ""
+            }
         }
     } catch {
         Write-Host "Unable to get information about the packages. MicroWin processing will continue, but packages will not be processed"
@@ -148,13 +240,8 @@ function Remove-ProvisionedPackages() {
         $appxProvisionedPackages = Get-AppxProvisionedPackage -Path "$($scratchDir)" | Where-Object {
                 $_.PackageName -NotLike "*AppInstaller*" -AND
                 $_.PackageName -NotLike "*Store*" -and
-                $_.PackageName -NotLike "*dism*" -and
-                $_.PackageName -NotLike "*Foundation*" -and
-                $_.PackageName -NotLike "*FodMetadata*" -and
-                $_.PackageName -NotLike "*LanguageFeatures*" -and
                 $_.PackageName -NotLike "*Notepad*" -and
                 $_.PackageName -NotLike "*Printing*" -and
-                $_.PackageName -NotLike "*Foundation*" -and
                 $_.PackageName -NotLike "*YourPhone*" -and
                 $_.PackageName -NotLike "*Xbox*" -and
                 $_.PackageName -NotLike "*WindowsTerminal*" -and
@@ -164,7 +251,8 @@ function Remove-ProvisionedPackages() {
                 $_.PackageName -NotLike "*Paint*" -and
                 $_.PackageName -NotLike "*Gaming*" -and
                 $_.PackageName -NotLike "*Extension*" -and
-                $_.PackageName -NotLike "*SecHealthUI*"
+                $_.PackageName -NotLike "*SecHealthUI*" -and
+                $_.PackageName -NotLike "*ScreenSketch*"
         }
 
         $counter = 0
@@ -185,6 +273,31 @@ function Remove-ProvisionedPackages() {
         # This can happen if getting AppX packages fails
         Write-Host "Unable to get information about the AppX packages. MicroWin processing will continue, but AppX packages will not be processed"
         Write-Host "Error information: $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+}
+
+function Get-LocalizedUsers
+{
+    <#
+        .SYNOPSIS
+            Gets a localized user group representation for ICACLS commands (Port from DISMTools PE Helper)
+        .PARAMETER admins
+            Determines whether to get a localized user group representation for the Administrators user group
+        .OUTPUTS
+            A string containing the localized user group
+        .EXAMPLE
+            Get-LocalizedUsers -admins $true
+    #>
+    param (
+        [Parameter(Mandatory = $true, Position = 0)] [bool]$admins
+    )
+    if ($admins)
+    {
+        return (Get-LocalGroup | Where-Object { $_.SID.Value -like "S-1-5-32-544" }).Name
+    }
+    else
+    {
+        return (Get-LocalGroup | Where-Object { $_.SID.Value -like "S-1-5-32-545" }).Name
     }
 }
 
@@ -259,7 +372,7 @@ function New-Unattend {
 
     param (
         [Parameter(Mandatory, Position = 0)] [string]$userName,
-        [Parameter(Position = 1)] [string] $userPassword
+        [Parameter(Position = 1)] [string]$userPassword
     )
 
     $unattend = @'
@@ -571,70 +684,70 @@ function New-CheckInstall {
     # using here string to embedd firstrun
     $checkInstall = @'
     @echo off
-    if exist "C:\windows\cpu.txt" (
-        echo C:\windows\cpu.txt exists
+    if exist "%HOMEDRIVE%\windows\cpu.txt" (
+        echo %HOMEDRIVE%\windows\cpu.txt exists
     ) else (
-        echo C:\windows\cpu.txt does not exist
+        echo %HOMEDRIVE%\windows\cpu.txt does not exist
     )
-    if exist "C:\windows\SerialNumber.txt" (
-        echo C:\windows\SerialNumber.txt exists
+    if exist "%HOMEDRIVE%\windows\SerialNumber.txt" (
+        echo %HOMEDRIVE%\windows\SerialNumber.txt exists
     ) else (
-        echo C:\windows\SerialNumber.txt does not exist
+        echo %HOMEDRIVE%\windows\SerialNumber.txt does not exist
     )
-    if exist "C:\unattend.xml" (
-        echo C:\unattend.xml exists
+    if exist "%HOMEDRIVE%\unattend.xml" (
+        echo %HOMEDRIVE%\unattend.xml exists
     ) else (
-        echo C:\unattend.xml does not exist
+        echo %HOMEDRIVE%\unattend.xml does not exist
     )
-    if exist "C:\Windows\Setup\Scripts\SetupComplete.cmd" (
-        echo C:\Windows\Setup\Scripts\SetupComplete.cmd exists
+    if exist "%HOMEDRIVE%\Windows\Setup\Scripts\SetupComplete.cmd" (
+        echo %HOMEDRIVE%\Windows\Setup\Scripts\SetupComplete.cmd exists
     ) else (
-        echo C:\Windows\Setup\Scripts\SetupComplete.cmd does not exist
+        echo %HOMEDRIVE%\Windows\Setup\Scripts\SetupComplete.cmd does not exist
     )
-    if exist "C:\Windows\Panther\unattend.xml" (
-        echo C:\Windows\Panther\unattend.xml exists
+    if exist "%HOMEDRIVE%\Windows\Panther\unattend.xml" (
+        echo %HOMEDRIVE%\Windows\Panther\unattend.xml exists
     ) else (
-        echo C:\Windows\Panther\unattend.xml does not exist
+        echo %HOMEDRIVE%\Windows\Panther\unattend.xml does not exist
     )
-    if exist "C:\Windows\System32\Sysprep\unattend.xml" (
-        echo C:\Windows\System32\Sysprep\unattend.xml exists
+    if exist "%HOMEDRIVE%\Windows\System32\Sysprep\unattend.xml" (
+        echo %HOMEDRIVE%\Windows\System32\Sysprep\unattend.xml exists
     ) else (
-        echo C:\Windows\System32\Sysprep\unattend.xml does not exist
+        echo %HOMEDRIVE%\Windows\System32\Sysprep\unattend.xml does not exist
     )
-    if exist "C:\Windows\FirstStartup.ps1" (
-        echo C:\Windows\FirstStartup.ps1 exists
+    if exist "%HOMEDRIVE%\Windows\FirstStartup.ps1" (
+        echo %HOMEDRIVE%\Windows\FirstStartup.ps1 exists
     ) else (
-        echo C:\Windows\FirstStartup.ps1 does not exist
+        echo %HOMEDRIVE%\Windows\FirstStartup.ps1 does not exist
     )
-    if exist "C:\Windows\winutil.ps1" (
-        echo C:\Windows\winutil.ps1 exists
+    if exist "%HOMEDRIVE%\Windows\winutil.ps1" (
+        echo %HOMEDRIVE%\Windows\winutil.ps1 exists
     ) else (
-        echo C:\Windows\winutil.ps1 does not exist
+        echo %HOMEDRIVE%\Windows\winutil.ps1 does not exist
     )
-    if exist "C:\Windows\LogSpecialize.txt" (
-        echo C:\Windows\LogSpecialize.txt exists
+    if exist "%HOMEDRIVE%\Windows\LogSpecialize.txt" (
+        echo %HOMEDRIVE%\Windows\LogSpecialize.txt exists
     ) else (
-        echo C:\Windows\LogSpecialize.txt does not exist
+        echo %HOMEDRIVE%\Windows\LogSpecialize.txt does not exist
     )
-    if exist "C:\Windows\LogAuditUser.txt" (
-        echo C:\Windows\LogAuditUser.txt exists
+    if exist "%HOMEDRIVE%\Windows\LogAuditUser.txt" (
+        echo %HOMEDRIVE%\Windows\LogAuditUser.txt exists
     ) else (
-        echo C:\Windows\LogAuditUser.txt does not exist
+        echo %HOMEDRIVE%\Windows\LogAuditUser.txt does not exist
     )
-    if exist "C:\Windows\LogOobeSystem.txt" (
-        echo C:\Windows\LogOobeSystem.txt exists
+    if exist "%HOMEDRIVE%\Windows\LogOobeSystem.txt" (
+        echo %HOMEDRIVE%\Windows\LogOobeSystem.txt exists
     ) else (
-        echo C:\Windows\LogOobeSystem.txt does not exist
+        echo %HOMEDRIVE%\Windows\LogOobeSystem.txt does not exist
     )
-    if exist "c:\windows\csup.txt" (
-        echo c:\windows\csup.txt exists
+    if exist "%HOMEDRIVE%\windows\csup.txt" (
+        echo %HOMEDRIVE%\windows\csup.txt exists
     ) else (
-        echo c:\windows\csup.txt does not exist
+        echo %HOMEDRIVE%\windows\csup.txt does not exist
     )
-    if exist "c:\windows\LogFirstRun.txt" (
-        echo c:\windows\LogFirstRun.txt exists
+    if exist "%HOMEDRIVE%\windows\LogFirstRun.txt" (
+        echo %HOMEDRIVE%\windows\LogFirstRun.txt exists
     ) else (
-        echo c:\windows\LogFirstRun.txt does not exist
+        echo %HOMEDRIVE%\windows\LogFirstRun.txt does not exist
     )
 '@
     $checkInstall | Out-File -FilePath "$env:temp\checkinstall.cmd" -Force -Encoding Ascii
@@ -672,7 +785,7 @@ function New-FirstRun {
         }
     }
 
-    "FirstStartup has worked" | Out-File -FilePath c:\windows\LogFirstRun.txt -Append -NoClobber
+    "FirstStartup has worked" | Out-File -FilePath "$env:HOMEDRIVE\windows\LogFirstRun.txt" -Append -NoClobber
 
     $taskbarPath = "$env:AppData\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar"
     # Delete all files on the Taskbar
@@ -692,7 +805,7 @@ function New-FirstRun {
         }
     }
     Remove-Item -Path "$env:USERPROFILE\Desktop\*.lnk"
-    Remove-Item -Path "C:\Users\Default\Desktop\*.lnk"
+    Remove-Item -Path "$env:HOMEDRIVE\Users\Default\Desktop\*.lnk"
 
     # ************************************************
     # Create WinUtil shortcut on the desktop
@@ -708,8 +821,8 @@ function New-FirstRun {
     # Create a shortcut object
     $shortcut = $shell.CreateShortcut($shortcutPath)
 
-    if (Test-Path -Path "c:\Windows\cttlogo.png") {
-        $shortcut.IconLocation = "c:\Windows\cttlogo.png"
+    if (Test-Path -Path "$env:HOMEDRIVE\Windows\cttlogo.png") {
+        $shortcut.IconLocation = "$env:HOMEDRIVE\Windows\cttlogo.png"
     }
 
     # Set properties of the shortcut
@@ -729,8 +842,17 @@ function New-FirstRun {
     # Done create WinUtil shortcut on the desktop
     # ************************************************
 
-    Start-Process explorer
+    try
+    {
+        if ((Get-WindowsOptionalFeature -Online | Where-Object { $_.FeatureName -like "Recall" }).Count -gt 0)
+        {
+            Disable-WindowsOptionalFeature -Online -FeatureName "Recall" -Remove
+        }
+    }
+    catch
+    {
 
+    }
 '@
     $firstRun | Out-File -FilePath "$env:temp\FirstStartup.ps1" -Force
 }
